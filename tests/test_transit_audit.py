@@ -13,6 +13,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pytest
+
 PROGRAM = Path(os.environ.get("PROGRAM_DIR", "/app")) / "transit_audit.py"
 CANDIDATE_PYTHON = os.environ.get("CANDIDATE_PYTHON", sys.executable)
 T0 = 2459000.0
@@ -208,8 +210,9 @@ def test_epoch_enumeration_and_partial_coverage():
     assert result["process"].returncode == 0
     report = report_json(result)
     assert [epoch["epoch"] for epoch in report["epochs"]] == [0, 1]
-    assert report["epochs"][0]["coverage_fraction"] == 0.5
-    assert report["epochs"][1]["coverage_fraction"] == 0.5
+    assert [epoch["coverage_fraction"] for epoch in report["epochs"]] == pytest.approx(
+        [0.5, 0.5], abs=1e-6
+    )
     assert [epoch["status"] for epoch in report["epochs"]] == [
         "COVERED",
         "COVERED",
@@ -244,7 +247,7 @@ def test_negative_epoch_and_touching_boundaries_are_not_candidates():
     assert result["process"].returncode == 0
     report = report_json(result)
     assert [epoch["epoch"] for epoch in report["epochs"]] == [-1]
-    assert report["epochs"][0]["sigma_minutes"] == 2.5
+    assert report["epochs"][0]["sigma_minutes"] == pytest.approx(2.5, abs=1e-6)
     assert report["epochs"][0]["status"] == "LOW_COVERAGE"
     assert report["status"] == "INSUFFICIENT"
 
@@ -271,7 +274,7 @@ def test_overlapping_visits_use_union_not_sum():
 
     assert result["process"].returncode == 0
     report = report_json(result)
-    assert report["epochs"][0]["coverage_fraction"] == 0.75
+    assert report["epochs"][0]["coverage_fraction"] == pytest.approx(0.75, abs=1e-6)
     assert report["epochs"][0]["qualifying_visit_ids"] == ["a", "b"]
     assert report["epochs"][0]["status"] == "COVERED"
 
@@ -299,7 +302,7 @@ def test_quality_airmass_and_clear_policy_control_coverage():
     assert relaxed["process"].returncode == 0
     relaxed_report = report_json(relaxed)
     assert len(relaxed_report["epochs"]) == 1
-    assert relaxed_report["epochs"][0]["coverage_fraction"] == 0.5
+    assert relaxed_report["epochs"][0]["coverage_fraction"] == pytest.approx(0.5, abs=1e-6)
     assert relaxed_report["epochs"][0]["qualifying_visit_ids"] == ["thin"]
     assert relaxed_report["epochs"][0]["status"] == "COVERED"
 
@@ -317,7 +320,7 @@ def test_quality_airmass_and_clear_policy_control_coverage():
     assert strict["process"].returncode == 0
     strict_report = report_json(strict)
     assert len(strict_report["epochs"]) == 1
-    assert strict_report["epochs"][0]["coverage_fraction"] == 0.0
+    assert strict_report["epochs"][0]["coverage_fraction"] == pytest.approx(0.0, abs=1e-6)
     assert strict_report["epochs"][0]["qualifying_visit_ids"] == []
     assert strict_report["epochs"][0]["status"] == "LOW_COVERAGE"
     assert strict_report["status"] == "INSUFFICIENT"
@@ -341,10 +344,51 @@ def test_coverage_threshold_uses_unrounded_value():
 
     assert result["process"].returncode == 0
     report = report_json(result)
-    assert report["epochs"][0]["coverage_fraction"] == 0.5
+    assert report["epochs"][0]["coverage_fraction"] == pytest.approx(0.5, abs=1e-6)
     assert report["epochs"][0]["status"] == "LOW_COVERAGE"
     assert report["status"] == "INSUFFICIENT"
     assert report["summary"]["covered_epochs"] == 0
+
+    exact_threshold_visit = {
+        "id": "exact-threshold",
+        "start_bjd": T0 - width / 2,
+        "end_bjd": T0,
+        "quality": "CLEAR",
+        "airmass": 1.1,
+    }
+    exact_threshold = run_audit(
+        scene(observations=[exact_threshold_visit]), report=b"", ledger=b""
+    )
+    assert exact_threshold["process"].returncode == 0
+    exact_report = report_json(exact_threshold)
+    assert exact_report["epochs"][0]["coverage_fraction"] == pytest.approx(0.5, abs=1e-6)
+    assert exact_report["epochs"][0]["status"] == "COVERED"
+    assert exact_report["status"] == "READY"
+
+    tolerance_width = 1.0
+    tolerance_start = T0 - tolerance_width / 2
+    tolerance_end = tolerance_start + tolerance_width * (0.5 - 5e-9)
+    raw_tolerance_coverage = (tolerance_end - tolerance_start) / tolerance_width
+    tolerance_threshold = raw_tolerance_coverage + 1e-8
+    within_tolerance_visit = {
+        "id": "within-threshold-tolerance",
+        "start_bjd": tolerance_start,
+        "end_bjd": tolerance_end,
+        "quality": "CLEAR",
+        "airmass": 1.1,
+    }
+    tolerance_candidate = scene()
+    tolerance_candidate["candidate"]["duration_minutes"] = 1440.0
+    tolerance_candidate["observations"] = [within_tolerance_visit]
+    tolerance_candidate["policy"]["min_coverage_fraction"] = tolerance_threshold
+    within_tolerance = run_audit(tolerance_candidate, report=b"", ledger=b"")
+    assert within_tolerance["process"].returncode == 0
+    tolerance_report = report_json(within_tolerance)
+    assert tolerance_report["epochs"][0]["coverage_fraction"] == pytest.approx(
+        raw_tolerance_coverage, abs=1e-6
+    )
+    assert tolerance_report["epochs"][0]["status"] == "COVERED"
+    assert tolerance_report["status"] == "READY"
 
 
 def test_sigma_is_quadrature_and_threshold_is_inclusive():
@@ -371,7 +415,7 @@ def test_sigma_is_quadrature_and_threshold_is_inclusive():
     assert result["process"].returncode == 0
     report = report_json(result)
     assert report["epochs"][0]["epoch"] == 1
-    assert report["epochs"][0]["sigma_minutes"] == 2.5
+    assert report["epochs"][0]["sigma_minutes"] == pytest.approx(2.5, abs=1e-6)
     assert report["epochs"][0]["status"] == "COVERED"
     assert report["status"] == "READY"
 
@@ -575,14 +619,23 @@ def test_distinct_valid_input_appends_one_ledger_event():
             "reference_sigma_minutes": 2.0,
             "drift_sigma_minutes_per_epoch": 1.5,
         }
-        for payload in (scene(), scene(candidate=second_candidate)):
-            input_path.write_text(
-                json.dumps(payload, ensure_ascii=False),
-                encoding="utf-8",
-            )
-            _own_tree(work_dir)
-            process = execute(input_path, output_path, ledger_path, work_dir)
-            assert process.returncode == 0
+        first_payload = scene()
+        input_path.write_text(
+            json.dumps(first_payload, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        _own_tree(work_dir)
+        first_process = execute(input_path, output_path, ledger_path, work_dir)
+        assert first_process.returncode == 0
+
+        second_payload = scene(candidate=second_candidate)
+        input_path.write_text(
+            json.dumps(second_payload, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        _own_tree(work_dir)
+        second_process = execute(input_path, output_path, ledger_path, work_dir)
+        assert second_process.returncode == 0
 
         rows = [
             json.loads(line)
@@ -686,6 +739,18 @@ def test_schema_type_and_range_rejection_preserves_outputs():
         "sentinel.bin",
     ]
     assert airmass_result["temporary_entries"] == []
+
+    lower_bound_airmass = scene()
+    lower_bound_airmass["observations"][0]["airmass"] = 1.0
+    lower_bound_result = run_audit(
+        lower_bound_airmass,
+        report=b"",
+        ledger=b"",
+    )
+    assert lower_bound_result["process"].returncode == 0
+    lower_bound_report = report_json(lower_bound_result)
+    assert lower_bound_report["epochs"][0]["status"] == "COVERED"
+    assert lower_bound_report["status"] == "READY"
 
 
 def test_success_has_no_temp_artifacts_and_output_target_error_is_rejected():

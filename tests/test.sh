@@ -7,13 +7,23 @@ if [ "$TESTS_DIR" = "/tests" ]; then
     BASE_DIR=/logs/verifier
     REWARD_FILE=${REWARD_FILE:-$BASE_DIR/reward.txt}
     PROGRAM_DIR=${PROGRAM_DIR:-/app}
+    TRUSTED_PYTHON=/usr/local/bin/python3
 else
     BASE_DIR=$(CDPATH= cd -- "$TESTS_DIR/.." && pwd)
     REWARD_FILE=${REWARD_FILE:-$BASE_DIR/reward.txt}
     PROGRAM_DIR=${PROGRAM_DIR:-$BASE_DIR/environment}
+    TRUSTED_PYTHON=/opt/homebrew/bin/python3.14
 fi
-PYTHON_BIN=${PYTHON_BIN:-$(command -v python3)}
-CANDIDATE_PYTHON=${CANDIDATE_PYTHON:-$PYTHON_BIN}
+
+# Do not trust PATH, PYTHON_BIN, or CANDIDATE_PYTHON from the candidate's
+# environment. The verifier and the program under test must start from the
+# image/local harness's fixed, absolute interpreter entry point.
+if [ ! -x "$TRUSTED_PYTHON" ]; then
+    printf '%s\n' 'trusted verifier interpreter unavailable' >&2
+    exit 1
+fi
+PYTHON_BIN=$TRUSTED_PYTHON
+CANDIDATE_PYTHON=$TRUSTED_PYTHON
 export PROGRAM_DIR CANDIDATE_PYTHON PYTHON_BIN
 
 mkdir -p "$BASE_DIR" "$(dirname -- "$REWARD_FILE")"
@@ -137,6 +147,7 @@ import sys
 mode, timeout_text, test_file, output, status_path, tmp, program_dir, candidate_python = sys.argv[1:9]
 command = [
     os.path.join(tmp, "venv", "bin", "python"),
+    "-B",
     "-I",
     "-m",
     "pytest",
