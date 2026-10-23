@@ -6,7 +6,7 @@
 python3 /app/transit_audit.py --input <scenario.json> --output <report.json> --ledger <ledger.jsonl>
 ```
 
-修复该程序，使其生成可复算的凌星覆盖报告。所有时间均为合成的 BJD 日数；不得联网，也不得使用第三方 Python 包。
+修复该程序，使其生成可复算的凌星覆盖报告。所有时间均为合成的 BJD 日数；程序必须离线运行，不发起网络请求，并且只能依赖 Python 标准库。
 
 ## 输入契约
 
@@ -36,7 +36,7 @@ midpoint(n) = reference_midpoint_bjd + n * period_days
 sqrt(reference_sigma_minutes^2 + (abs(epoch) * drift_sigma_minutes_per_epoch)^2)
 ```
 
-覆盖率达到 `min_coverage_fraction`（相等时达到）且不确定度不大于 `max_ephemeris_sigma_minutes` 的历元状态为 `COVERED`。覆盖率达到阈值而不确定度超过上限的状态为 `TIMING_REVIEW`；其余为 `LOW_COVERAGE`。
+覆盖率达到 `min_coverage_fraction`（相等时达到）且不确定度不大于 `max_ephemeris_sigma_minutes` 的历元状态为 `COVERED`。阈值比较必须使用未舍入的原始覆盖率；为吸收二进制浮点表示的微小误差，原始覆盖率与阈值的绝对差在 `1e-8` 以内时视为达到阈值。只有报告中的 `coverage_fraction` 字段才四舍五入到 6 位小数，显示值不能反过来影响状态判定。覆盖率达到阈值而不确定度超过上限的状态为 `TIMING_REVIEW`；其余为 `LOW_COVERAGE`。
 
 顶层状态：没有候选历元时为 `NO_TRANSIT`；存在至少一个 `TIMING_REVIEW` 时为 `REVIEW`；否则存在至少一个 `COVERED` 时为 `READY`；其余为 `INSUFFICIENT`。这个顺序是固定的。
 
@@ -44,6 +44,6 @@ sqrt(reference_sigma_minutes^2 + (abs(epoch) * drift_sigma_minutes_per_epoch)^2)
 
 成功报告必须是 UTF-8 紧凑 JSON、对象键字典序稳定并以单个 LF 结尾。顶层字段恰为 `candidate_id`、`epochs`、`status`、`summary`。每个 `epochs` 项字段恰为 `coverage_fraction`、`epoch`、`midpoint_bjd`、`qualifying_visit_ids`、`sigma_minutes`、`status`；`summary` 字段恰为 `candidate_epochs`、`covered_epochs`、`timing_review_epochs`。`coverage_fraction` 与 `sigma_minutes` 四舍五入到 6 位小数，`midpoint_bjd` 四舍五入到 8 位小数。报告中数组、字段和数值必须稳定。
 
-账本每行是紧凑、键排序的 JSON 事件，字段恰为 `candidate_id`、`fingerprint`、`qualified_epochs`、`status`。`fingerprint` 是原始输入对象按键排序、紧凑分隔符、UTF-8 编码后所得的小写 SHA-256。相同规范输入重复运行只能保留一条事件；不同规范输入追加一条事件。`qualified_epochs` 是 `COVERED` 历元数。
+账本每行是紧凑、键排序的 JSON 事件，字段恰为 `candidate_id`、`fingerprint`、`qualified_epochs`、`status`。`fingerprint` 是原始输入对象按键排序、紧凑分隔符、UTF-8 编码后所得的小写 SHA-256；必须在任何校验或数值归一化之前基于 JSON 解析出的原始表示计算。JSON 中整数写法 `2` 与浮点写法 `2.0` 属于不同原始表示，即使科学计算结果相同，也必须产生不同指纹。相同规范输入重复运行只能保留一条事件；不同规范输入追加一条事件。`qualified_epochs` 是 `COVERED` 历元数。
 
 成功时必须以同目录临时文件完成报告和账本更新后再替换目标；账本读取失败或任一输出无法准备时，两个既有目标均不改写，且不留下程序临时文件。相同合法输入重复执行时，报告和账本的字节必须稳定。

@@ -3,21 +3,32 @@ allow_internet = true
 
 [task]
 name = "local/exoplanet-transit-ephemeris-audit"
-title = "系外行星凌星历元审计"
 description = "修复一项根据地面观测记录审计系外行星凌星候选历元的确定性程序。"
 authors = [{ name = "xyj" }]
+keywords = ["astronomy", "exoplanets", "transits", "time-series", "observing"]
 
 [agent]
 timeout_sec = 3600
+user = "agent"
 
 [environment]
 dockerfile = "environment/Dockerfile"
 network_mode = "public"
+allow_internet = true
+build_timeout_sec = 900
+cpus = 1
+memory_mb = 2048
+storage_mb = 4096
+gpus = 0
 
 [verifier]
 timeout_sec = 1800
+user = "root"
+environment_mode = "shared"
 
 [metadata]
+title = "系外行星凌星历元审计"
 difficulty = "expert"
 category = "astronomy-space"
 tags = ["astronomy", "exoplanets", "transits", "time-series", "observing"]
+expert_time_estimate = "4h"

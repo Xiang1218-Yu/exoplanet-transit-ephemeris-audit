@@ -94,14 +94,16 @@ def audit(c, observations, p):
             if permitted_quality and visit["airmass"] <= p["max_airmass"]:
                 qualifying.append(visit["id"]); intervals.append((left, right))
         coverage = min(1.0, merged_length(intervals) / width)
+        coverage_rounded = round(coverage, 6)
         sigma = math.sqrt(c["reference_sigma_minutes"] ** 2 + (abs(epoch) * c["drift_sigma_minutes_per_epoch"]) ** 2)
-        if coverage >= p["min_coverage_fraction"] and sigma <= p["max_ephemeris_sigma_minutes"]:
+        coverage_meets_threshold = coverage + 1e-8 >= p["min_coverage_fraction"]
+        if coverage_meets_threshold and sigma <= p["max_ephemeris_sigma_minutes"]:
             state = "COVERED"
-        elif coverage >= p["min_coverage_fraction"]:
+        elif coverage_meets_threshold:
             state = "TIMING_REVIEW"
         else:
             state = "LOW_COVERAGE"
-        result.append({"coverage_fraction": round(coverage, 6), "epoch": epoch, "midpoint_bjd": round(c["reference_midpoint_bjd"] + epoch * c["period_days"], 8), "qualifying_visit_ids": sorted(qualifying), "sigma_minutes": round(sigma, 6), "status": state})
+        result.append({"coverage_fraction": coverage_rounded, "epoch": epoch, "midpoint_bjd": round(c["reference_midpoint_bjd"] + epoch * c["period_days"], 8), "qualifying_visit_ids": sorted(qualifying), "sigma_minutes": round(sigma, 6), "status": state})
     if not result: top = "NO_TRANSIT"
     elif any(item["status"] == "TIMING_REVIEW" for item in result): top = "REVIEW"
     elif any(item["status"] == "COVERED" for item in result): top = "READY"
@@ -151,9 +153,10 @@ def main():
     except Exception:
         print("REJECT INPUT", file=sys.stderr); return 2
     try:
+        fingerprint = hashlib.sha256(canonical(data)).hexdigest()
         c, observations, p = validate(data)
         report = audit(c, observations, p)
-        event = {"candidate_id": c["id"], "fingerprint": hashlib.sha256(canonical(data)).hexdigest(), "qualified_epochs": report["summary"]["covered_epochs"], "status": report["status"]}
+        event = {"candidate_id": c["id"], "fingerprint": fingerprint, "qualified_epochs": report["summary"]["covered_epochs"], "status": report["status"]}
         staged_replace(Path(args.output), Path(args.ledger), report, event)
     except ValueError:
         return 2
